@@ -16,6 +16,21 @@ class Database:
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS processed_tx (tx_id TEXT PRIMARY KEY)"
             )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS deposits ("
+                "tx_id TEXT PRIMARY KEY, "
+                "address TEXT, "
+                "amount TEXT, "
+                "created_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS pending_unknown ("
+                "tx_id TEXT PRIMARY KEY, "
+                "address TEXT, "
+                "amount TEXT"
+                ")"
+            )
             await db.commit()
 
     async def _get_setting(self, key: str) -> str | None:
@@ -81,4 +96,49 @@ class Database:
             await db.execute(
                 "INSERT OR IGNORE INTO processed_tx(tx_id) VALUES (?)", (tx_id,)
             )
+            await db.commit()
+
+    async def add_deposit(self, tx_id: str, address: str, amount: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO deposits(tx_id, address, amount) VALUES (?, ?, ?)",
+                (tx_id, address, amount),
+            )
+            await db.commit()
+
+    async def list_deposits(self, limit: int, offset: int) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT d.address, d.amount, d.created_at, c.name "
+                "FROM deposits d LEFT JOIN contacts c ON c.address = d.address "
+                "ORDER BY d.rowid DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            rows = await cur.fetchall()
+        return [
+            {"address": row[0], "amount": row[1], "created_at": row[2], "name": row[3]}
+            for row in rows
+        ]
+
+    async def add_pending_unknown(self, tx_id: str, address: str, amount: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO pending_unknown(tx_id, address, amount) VALUES (?, ?, ?)",
+                (tx_id, address, amount),
+            )
+            await db.commit()
+
+    async def get_next_pending_unknown(self) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT tx_id, address, amount FROM pending_unknown ORDER BY rowid ASC LIMIT 1"
+            )
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return {"tx_id": row[0], "address": row[1], "amount": row[2]}
+
+    async def delete_pending_unknown(self, tx_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM pending_unknown WHERE tx_id = ?", (tx_id,))
             await db.commit()

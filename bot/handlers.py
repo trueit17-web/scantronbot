@@ -5,11 +5,23 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from .db import Database
-from .keyboards import BTN_ADD, BTN_CANCEL, BTN_WALLET, cancel_menu, main_menu
+from .keyboards import (
+    BTN_ADD,
+    BTN_CANCEL,
+    BTN_LOG,
+    BTN_LOG_BACK,
+    BTN_LOG_MORE,
+    BTN_WALLET,
+    cancel_menu,
+    log_menu,
+    main_menu,
+)
 from .tron import TronClient
 from .utils import is_valid_address, short_address
 
 router = Router()
+
+LOG_PAGE_SIZE = 10
 
 
 class WalletStates(StatesGroup):
@@ -21,9 +33,62 @@ class ContactStates(StatesGroup):
     waiting_name = State()
 
 
+class UnknownSenderStates(StatesGroup):
+    waiting_name = State()
+
+
+class LogStates(StatesGroup):
+    viewing = State()
+
+
 async def _is_authorized(db: Database, user_id: int) -> bool:
     owner = await db.get_owner()
     return owner is None or owner == user_id
+
+
+async def _ask_unknown_sender(bot, state: FSMContext, pending: dict) -> None:
+    await state.set_state(UnknownSenderStates.waiting_name)
+    await state.update_data(
+        pending_tx_id=pending["tx_id"],
+        address=pending["address"],
+        amount=pending["amount"],
+    )
+    await bot.send_message(
+        state.key.chat_id,
+        f"+{pending['amount']} USDT от кого?\n"
+        f"Адрес: {short_address(pending['address'])}\n"
+        "Пришлите имя отправителя.",
+        reply_markup=cancel_menu(),
+    )
+
+
+async def try_prompt_pending_unknown(bot, state: FSMContext, db: Database) -> bool:
+    if await state.get_state() is not None:
+        return False
+    pending = await db.get_next_pending_unknown()
+    if not pending:
+        return False
+    await _ask_unknown_sender(bot, state, pending)
+    return True
+
+
+async def _return_to_menu_or_prompt(message: Message, state: FSMContext, db: Database) -> None:
+    if not await try_prompt_pending_unknown(message.bot, state, db):
+        await message.answer("Главное меню:", reply_markup=main_menu())
+
+
+def _format_deposit_line(idx: int, entry: dict) -> str:
+    label = entry["name"] or short_address(entry["address"])
+    return f"{idx}. {entry['amount']} USDT — {label} ({entry['created_at']})"
+
+
+async def _render_log_page(db: Database, offset: int) -> tuple[str, list[dict]]:
+    entries = await db.list_deposits(limit=LOG_PAGE_SIZE, offset=offset)
+    if not entries:
+        text = "Пополнений пока нет." if offset == 0 else "Больше пополнений нет."
+        return text, entries
+    lines = [_format_deposit_line(offset + i + 1, e) for i, e in enumerate(entries)]
+    return "\n".join(lines), entries
 
 
 @router.message(CommandStart())
@@ -41,14 +106,21 @@ async def cmd_start(message: Message, state: FSMContext, db: Database):
         return
 
     await state.clear()
-    await message.answer("Главное меню:", reply_markup=main_menu())
+    await _return_to_menu_or_prompt(message, state, db)
 
 
 @router.message(Command("cancel"))
 @router.message(F.text == BTN_CANCEL)
-async def cmd_cancel(message: Message, state: FSMContext):
+async def cmd_cancel(message: Message, state: FSMContext, db: Database):
+    current_state = await state.get_state()
+    if current_state == UnknownSenderStates.waiting_name.state:
+        data = await state.get_data()
+        tx_id = data.get("pending_tx_id")
+        if tx_id:
+            await db.delete_pending_unknown(tx_id)
     await state.clear()
-    await message.answer("Отменено.", reply_markup=main_menu())
+    await message.answer("Отменено.")
+    await _return_to_menu_or_prompt(message, state, db)
 
 
 @router.message(Command("menu"))
@@ -62,7 +134,7 @@ async def cmd_menu(message: Message, state: FSMContext, db: Database):
         )
         return
     await state.clear()
-    await message.answer("Главное меню:", reply_markup=main_menu())
+    await _return_to_menu_or_prompt(message, state, db)
 
 
 @router.message(Command("contacts"))
@@ -121,9 +193,8 @@ async def set_wallet_address(
         pass
 
     await state.clear()
-    await message.answer(
-        f"Кошелек для наблюдения установлен:\n{address}", reply_markup=main_menu()
-    )
+    await message.answer(f"Кошелек для наблюдения установлен:\n{address}")
+    await _return_to_menu_or_prompt(message, state, db)
 
 
 @router.message(F.text == BTN_ADD)
@@ -171,12 +242,68 @@ async def add_contact_name(message: Message, state: FSMContext, db: Database):
     address = data.get("address")
     if not address:
         await state.clear()
-        await message.answer("Что-то пошло не так, начните заново.", reply_markup=main_menu())
+        await _return_to_menu_or_prompt(message, state, db)
         return
 
     name = name[:64]
     await db.add_contact(address, name)
     await state.clear()
-    await message.answer(
-        f"Сохранено: {short_address(address)} → {name}", reply_markup=main_menu()
-    )
+    await message.answer(f"Сохранено: {short_address(address)} → {name}")
+    await _return_to_menu_or_prompt(message, state, db)
+
+
+@router.message(UnknownSenderStates.waiting_name)
+async def set_unknown_sender_name(message: Message, state: FSMContext, db: Database):
+    if not await _is_authorized(db, message.from_user.id):
+        await state.clear()
+        return
+
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("Имя не может быть пустым. Пришлите имя.")
+        return
+
+    data = await state.get_data()
+    address = data.get("address")
+    tx_id = data.get("pending_tx_id")
+    amount = data.get("amount")
+    if not address:
+        await state.clear()
+        await _return_to_menu_or_prompt(message, state, db)
+        return
+
+    name = name[:64]
+    await db.add_contact(address, name)
+    if tx_id:
+        await db.delete_pending_unknown(tx_id)
+    await state.clear()
+    await message.answer(f"Записано: {amount} USDT от {name} ({short_address(address)})")
+    await _return_to_menu_or_prompt(message, state, db)
+
+
+@router.message(F.text == BTN_LOG)
+async def btn_log(message: Message, state: FSMContext, db: Database):
+    if not await _is_authorized(db, message.from_user.id):
+        return
+    text, entries = await _render_log_page(db, 0)
+    await state.set_state(LogStates.viewing)
+    await state.update_data(offset=len(entries))
+    await message.answer(text, reply_markup=log_menu())
+
+
+@router.message(LogStates.viewing, F.text == BTN_LOG_MORE)
+async def btn_log_more(message: Message, state: FSMContext, db: Database):
+    if not await _is_authorized(db, message.from_user.id):
+        return
+    data = await state.get_data()
+    offset = data.get("offset", 0)
+    text, entries = await _render_log_page(db, offset)
+    if entries:
+        await state.update_data(offset=offset + len(entries))
+    await message.answer(text, reply_markup=log_menu())
+
+
+@router.message(LogStates.viewing, F.text == BTN_LOG_BACK)
+async def btn_log_back(message: Message, state: FSMContext, db: Database):
+    await state.clear()
+    await _return_to_menu_or_prompt(message, state, db)

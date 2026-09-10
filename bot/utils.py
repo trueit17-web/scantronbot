@@ -11,3 +11,8 @@ def short_address(address: str) -> str:
     if len(address) <= 12:
         return address
     return f"{address[:6]}...{address[-4:]}"
+
+
+def format_amount(amount: float) -> str:
+    text = f"{amount:.6f}".rstrip("0").rstrip(".")
+    return text or "0"

@@ -2,15 +2,20 @@ import asyncio
 import logging
 
 from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import BaseStorage, StorageKey
 
 from .db import Database
+from .handlers import try_prompt_pending_unknown
 from .tron import TronClient
-from .utils import short_address
+from .utils import format_amount
 
 logger = logging.getLogger(__name__)
 
 
-async def monitor_loop(bot: Bot, db: Database, tron: TronClient, poll_interval: int) -> None:
+async def monitor_loop(
+    bot: Bot, db: Database, tron: TronClient, storage: BaseStorage, poll_interval: int
+) -> None:
     while True:
         try:
             wallet = await db.get_wallet()
@@ -24,19 +29,33 @@ async def monitor_loop(bot: Bot, db: Database, tron: TronClient, poll_interval: 
                     await db.mark_tx_processed(tx_id)
 
                     sender = transfer["from"]
+                    amount = format_amount(transfer["amount"])
+                    await db.add_deposit(tx_id, sender, amount)
+
                     name = await db.get_contact_name(sender)
-                    label = name if name else short_address(sender)
-                    text = (
-                        "💰 Новое поступление USDT (TRC20)\n"
-                        f"Сумма: {transfer['amount']} USDT\n"
-                        f"От: {label}\n"
-                        f"Адрес: {sender}\n"
-                        f"Tx: {tx_id}"
-                    )
-                    try:
-                        await bot.send_message(owner, text)
-                    except Exception:
-                        logger.exception("Failed to send notification")
+                    if name:
+                        text = (
+                            "💰 Новое поступление USDT (TRC20)\n"
+                            f"Сумма: {amount} USDT\n"
+                            f"От: {name}\n"
+                            f"Адрес: {sender}\n"
+                            f"Tx: {tx_id}"
+                        )
+                        try:
+                            await bot.send_message(owner, text)
+                        except Exception:
+                            logger.exception("Failed to send notification")
+                    else:
+                        await db.add_pending_unknown(tx_id, sender, amount)
+
+                state = FSMContext(
+                    storage=storage,
+                    key=StorageKey(bot_id=bot.id, chat_id=owner, user_id=owner),
+                )
+                try:
+                    await try_prompt_pending_unknown(bot, state, db)
+                except Exception:
+                    logger.exception("Failed to prompt for unknown sender")
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -6,6 +6,7 @@ import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from . import config
 from .db import Database
@@ -32,7 +33,8 @@ async def main() -> None:
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     dp.include_router(router)
 
     await bot.set_my_commands(
@@ -47,7 +49,7 @@ async def main() -> None:
     async with aiohttp.ClientSession() as session:
         tron = TronClient(session, api_key=config.TRON_API_KEY)
         monitor_task = asyncio.create_task(
-            monitor_loop(bot, db, tron, config.POLL_INTERVAL)
+            monitor_loop(bot, db, tron, storage, config.POLL_INTERVAL)
         )
         try:
             await dp.start_polling(bot, db=db, tron=tron)
