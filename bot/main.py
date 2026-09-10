@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from . import config
+from .cleanup import LogSentMessagesMiddleware, midnight_cleanup_loop
 from .db import Database
 from .handlers import router
 from .monitor import monitor_loop
@@ -33,6 +34,7 @@ async def main() -> None:
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    bot.session.middleware(LogSentMessagesMiddleware(db))
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     dp.include_router(router)
@@ -51,14 +53,19 @@ async def main() -> None:
         monitor_task = asyncio.create_task(
             monitor_loop(bot, db, tron, storage, config.POLL_INTERVAL)
         )
+        cleanup_task = asyncio.create_task(
+            midnight_cleanup_loop(bot, db, config.TIMEZONE)
+        )
         try:
             await dp.start_polling(bot, db=db, tron=tron)
         finally:
             monitor_task.cancel()
-            try:
-                await monitor_task
-            except asyncio.CancelledError:
-                pass
+            cleanup_task.cancel()
+            for task in (monitor_task, cleanup_task):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             await bot.session.close()
 
 

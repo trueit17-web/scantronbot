@@ -31,6 +31,13 @@ class Database:
                 "amount TEXT"
                 ")"
             )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS chat_log ("
+                "chat_id INTEGER, "
+                "message_id INTEGER, "
+                "PRIMARY KEY (chat_id, message_id)"
+                ")"
+            )
             await db.commit()
 
     async def _get_setting(self, key: str) -> str | None:
@@ -141,4 +148,26 @@ class Database:
     async def delete_pending_unknown(self, tx_id: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("DELETE FROM pending_unknown WHERE tx_id = ?", (tx_id,))
+            await db.commit()
+
+    async def log_chat_message(self, chat_id: int, message_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO chat_log(chat_id, message_id) VALUES (?, ?)",
+                (chat_id, message_id),
+            )
+            await db.commit()
+
+    async def list_chat_messages(self, chat_id: int) -> list[int]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT message_id FROM chat_log WHERE chat_id = ? ORDER BY message_id ASC",
+                (chat_id,),
+            )
+            rows = await cur.fetchall()
+        return [row[0] for row in rows]
+
+    async def clear_chat_messages(self, chat_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM chat_log WHERE chat_id = ?", (chat_id,))
             await db.commit()

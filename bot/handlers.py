@@ -16,10 +16,12 @@ from .keyboards import (
     log_menu,
     main_menu,
 )
+from .cleanup import log_incoming_message
 from .tron import TronClient
 from .utils import is_valid_address, short_address
 
 router = Router()
+router.message.outer_middleware(log_incoming_message)
 
 LOG_PAGE_SIZE = 10
 
