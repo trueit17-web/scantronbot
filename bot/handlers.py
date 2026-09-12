@@ -279,7 +279,7 @@ async def set_unknown_sender_name(message: Message, state: FSMContext, db: Datab
     if tx_id:
         await db.delete_pending_unknown(tx_id)
     await state.clear()
-    await message.answer(f"Записано: {amount} USDT от {name} ({short_address(address)})")
+    await message.answer(f"+{amount} на {name}.")
     await _return_to_menu_or_prompt(message, state, db)
 
 

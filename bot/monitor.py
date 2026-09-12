@@ -34,13 +34,7 @@ async def monitor_loop(
 
                     name = await db.get_contact_name(sender)
                     if name:
-                        text = (
-                            "💰 Новое поступление USDT (TRC20)\n"
-                            f"Сумма: {amount} USDT\n"
-                            f"От: {name}\n"
-                            f"Адрес: {sender}\n"
-                            f"Tx: {tx_id}"
-                        )
+                        text = f"+{amount} на {name}."
                         try:
                             await bot.send_message(owner, text)
                         except Exception:
