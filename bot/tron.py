@@ -53,3 +53,27 @@ class TronClient:
                 }
             )
         return results
+
+    async def get_usdt_balance(self, address: str) -> float:
+        url = f"{self.base_url}/account"
+        params = {"address": address}
+        headers = {"TRON-PRO-API-KEY": self.api_key} if self.api_key else {}
+
+        async with self.session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            resp.raise_for_status()
+            payload = await resp.json()
+
+        for token in payload.get("trc20token_balances", []):
+            if token.get("tokenId") != USDT_TRC20_CONTRACT:
+                continue
+            try:
+                raw_value = int(token.get("balance", 0))
+            except (TypeError, ValueError):
+                return 0.0
+            return raw_value / (10**USDT_DECIMALS)
+        return 0.0

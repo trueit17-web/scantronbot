@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from . import config
-from .cleanup import LogSentMessagesMiddleware, midnight_cleanup_loop
+from .cleanup import LogSentMessagesMiddleware, midnight_tasks_loop
 from .db import Database
 from .handlers import router
 from .monitor import monitor_loop
@@ -44,6 +44,8 @@ async def main() -> None:
             {"command": "start", "description": "Запуск / настройка"},
             {"command": "menu", "description": "Главное меню"},
             {"command": "contacts", "description": "Список связок кошелек-имя"},
+            {"command": "balance", "description": "Баланс отслеживаемых кошельков"},
+            {"command": "status", "description": "Статус бота"},
             {"command": "cancel", "description": "Отменить текущее действие"},
         ]
     )
@@ -54,7 +56,14 @@ async def main() -> None:
             monitor_loop(bot, db, tron, storage, config.POLL_INTERVAL)
         )
         cleanup_task = asyncio.create_task(
-            midnight_cleanup_loop(bot, db, config.TIMEZONE)
+            midnight_tasks_loop(
+                bot,
+                db,
+                config.TIMEZONE,
+                config.DB_PATH,
+                config.BACKUP_DIR,
+                config.BACKUP_RETENTION_DAYS,
+            )
         )
         try:
             await dp.start_polling(bot, db=db, tron=tron)
